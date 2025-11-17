@@ -3,6 +3,8 @@
 #include "bno08x_driver/uart_interface.hpp"
 #include "bno08x_driver/spi_interface.hpp"
 
+#include <tf2/LinearMath/Quaternion.h>
+
 constexpr uint8_t ROTATION_VECTOR_RECEIVED = 0x01;
 constexpr uint8_t ACCELEROMETER_RECEIVED   = 0x02;
 constexpr uint8_t GYROSCOPE_RECEIVED       = 0x04;
@@ -199,53 +201,89 @@ void BNO08xROS::init_sensor() {
  * 
  */
 void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
-	DEBUG_LOG("Sensor Callback");
+    DEBUG_LOG("Sensor Callback");
     watchdog_->reset();
-	switch(sensor_value->sensorId){
-		case SH2_MAGNETIC_FIELD_CALIBRATED:
-			this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x;
-			this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y;
-			this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z;
-			this->mag_msg_.header.frame_id = this->frame_id_;
-			this->mag_msg_.header.stamp.sec = this->get_clock()->now().seconds();
-			this->mag_msg_.header.stamp.nanosec = this->get_clock()->now().nanoseconds();
+
+    switch(sensor_value->sensorId){
+        case SH2_MAGNETIC_FIELD_CALIBRATED:
+            this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x;
+            this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y;
+            this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z;
+            this->mag_msg_.header.frame_id = this->frame_id_;
+            this->mag_msg_.header.stamp = this->get_clock()->now();
 			// IMU will still return infrequent magnetic field reports even if the report
 			// was not enabled, so check it was enabled before publishing.
-			if (publish_magnetic_field_) {
-				this->mag_publisher_->publish(this->mag_msg_);
-			}
-			break;
-		case SH2_ROTATION_VECTOR:
-			this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
-			this->imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
-			this->imu_msg_.orientation.z = sensor_value->un.rotationVector.k;
-			this->imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
-			imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
-			break;
-		case SH2_ACCELEROMETER:
-			this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
-			this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
-			this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
-			imu_received_flag_ |= ACCELEROMETER_RECEIVED;
-			break;
-		case SH2_GYROSCOPE_CALIBRATED:
-			this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
-			this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
-			this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
-			imu_received_flag_ |= GYROSCOPE_RECEIVED;
-			break;
-		default:
-			break;
-	}
+            if (publish_magnetic_field_) {
+                this->mag_publisher_->publish(this->mag_msg_);
+            }
+            break;
 
-	if(imu_received_flag_ == (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED)){
-		this->imu_msg_.header.frame_id = this->frame_id_;
-		this->imu_msg_.header.stamp.sec = this->get_clock()->now().seconds();
-		this->imu_msg_.header.stamp.nanosec = this->get_clock()->now().nanoseconds();
-		this->imu_publisher_->publish(this->imu_msg_);
-		imu_received_flag_ = 0;
-	}
+        case SH2_ROTATION_VECTOR: {
+            // --- RAW quaternion from BNO08x (END frame) ---
+            double qx = sensor_value->un.rotationVector.i;
+            double qy = sensor_value->un.rotationVector.j;
+            double qz = sensor_value->un.rotationVector.k;
+            double qw = sensor_value->un.rotationVector.real;
 
+            // Convert END → ENU using 180° rotation about X
+            tf2::Quaternion q_end(qx, qy, qz, qw);
+            tf2::Quaternion flip_x(1, 0, 0, 0);   // π rad rotation around X
+            tf2::Quaternion q_enu = flip_x * q_end;
+            q_enu.normalize();
+
+            this->imu_msg_.orientation.x = q_enu.x();
+            this->imu_msg_.orientation.y = q_enu.y();
+            this->imu_msg_.orientation.z = q_enu.z();
+            this->imu_msg_.orientation.w = q_enu.w();
+
+            // Add orientation covariance (tunable)
+            this->imu_msg_.orientation_covariance[0] = 1e-4;  // roll
+            this->imu_msg_.orientation_covariance[4] = 1e-4;  // pitch
+            this->imu_msg_.orientation_covariance[8] = 5e-3;  // yaw (noisiest)
+
+            imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
+            break;
+        }
+
+        case SH2_ACCELEROMETER:
+            this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
+            this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
+            this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
+
+            // acceleration covariance (lightly trusted)
+            this->imu_msg_.linear_acceleration_covariance[0] = 0.02;
+            this->imu_msg_.linear_acceleration_covariance[4] = 0.02;
+            this->imu_msg_.linear_acceleration_covariance[8] = 0.02;
+
+            imu_received_flag_ |= ACCELEROMETER_RECEIVED;
+            break;
+
+        case SH2_GYROSCOPE_CALIBRATED:
+            this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
+            this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
+            this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
+
+            // gyro covariance (high-quality calibrated)
+            this->imu_msg_.angular_velocity_covariance[0] = 5e-4;
+            this->imu_msg_.angular_velocity_covariance[4] = 5e-4;
+            this->imu_msg_.angular_velocity_covariance[8] = 5e-4;
+
+            imu_received_flag_ |= GYROSCOPE_RECEIVED;
+            break;
+
+        default:
+            break;
+    }
+
+    // Publish only when all three reports are ready
+    if (imu_received_flag_ ==
+       (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
+    {
+        this->imu_msg_.header.frame_id = this->frame_id_;
+        this->imu_msg_.header.stamp = this->get_clock()->now();
+        this->imu_publisher_->publish(this->imu_msg_);
+        imu_received_flag_ = 0;
+    }
 }
 
 /**
