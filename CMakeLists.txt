@@ -20,8 +20,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
 
 # Add include directories for main driver
 include_directories(
@@ -54,15 +52,11 @@ target_link_libraries(bno08x_driver
   sh2_library
 )
 
-ament_export_dependencies(tf2 tf2_ros)
-
 ament_target_dependencies(
   bno08x_driver
   "rclcpp"
   "sensor_msgs"
   "std_msgs"
-  "tf2"
-  "tf2_ros"
 )
 
 # Install the executable and the config files

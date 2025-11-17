@@ -3,8 +3,6 @@
 #include "bno08x_driver/uart_interface.hpp"
 #include "bno08x_driver/spi_interface.hpp"
 
-#include <tf2/LinearMath/Quaternion.h>
-
 constexpr uint8_t ROTATION_VECTOR_RECEIVED = 0x01;
 constexpr uint8_t ACCELEROMETER_RECEIVED   = 0x02;
 constexpr uint8_t GYROSCOPE_RECEIVED       = 0x04;
@@ -143,6 +141,9 @@ void BNO08xROS::init_parameters() {
     this->get_parameter("publish.magnetic_field.rate", magnetic_field_rate_);
     this->get_parameter("publish.imu.enabled", publish_imu_);
     this->get_parameter("publish.imu.rate", imu_rate_);
+    this->declare_parameter<double>("imu.orientation_yaw_variance", 5e-3); //  default 0.005 means pretty trustworthy
+
+    this->get_parameter("imu.orientation_yaw_variance", orientation_yaw_variance_);
 }
 
 /**
@@ -204,6 +205,9 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     DEBUG_LOG("Sensor Callback");
     watchdog_->reset();
 
+    // Note: we must provide realistic covariances for all fields in the Imu message,
+    //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
+
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
             this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x;
@@ -219,27 +223,17 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
 
         case SH2_ROTATION_VECTOR: {
-            // --- RAW quaternion from BNO08x (END frame) ---
-            double qx = sensor_value->un.rotationVector.i;
-            double qy = sensor_value->un.rotationVector.j;
-            double qz = sensor_value->un.rotationVector.k;
-            double qw = sensor_value->un.rotationVector.real;
+            // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
+            this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
+            this->imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
+            this->imu_msg_.orientation.z = sensor_value->un.rotationVector.k;
+            this->imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
 
-            // Convert END → ENU using 180° rotation about X
-            tf2::Quaternion q_end(qx, qy, qz, qw);
-            tf2::Quaternion flip_x(1, 0, 0, 0);   // π rad rotation around X
-            tf2::Quaternion q_enu = flip_x * q_end;
-            q_enu.normalize();
-
-            this->imu_msg_.orientation.x = q_enu.x();
-            this->imu_msg_.orientation.y = q_enu.y();
-            this->imu_msg_.orientation.z = q_enu.z();
-            this->imu_msg_.orientation.w = q_enu.w();
-
-            // Add orientation covariance (tunable)
+            // Add orientation covariance (tunable):
             this->imu_msg_.orientation_covariance[0] = 1e-4;  // roll
             this->imu_msg_.orientation_covariance[4] = 1e-4;  // pitch
-            this->imu_msg_.orientation_covariance[8] = 5e-3;  // yaw (noisiest)
+            // 5e-3 - default for yaw (noisiest):
+            this->imu_msg_.orientation_covariance[8] = orientation_yaw_variance_;
 
             imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
             break;

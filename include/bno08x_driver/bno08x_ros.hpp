@@ -50,6 +50,7 @@ private:
     int magnetic_field_rate_;
     bool publish_imu_;
     int imu_rate_;
+    double orientation_yaw_variance_;
 
     bool publish_orientation_;
     bool publish_acceleration_;
