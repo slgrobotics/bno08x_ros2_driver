@@ -214,7 +214,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 float to_tesla = 1e-6; // Convert microTesla to Tesla
                 this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
                 this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y * to_tesla;
-                this->mag_msg_.magnetic_field.z = -sensor_value->un.magneticField.z * to_tesla;
+                this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z * to_tesla;
                 this->mag_msg_.header.frame_id = this->frame_id_;
                 this->mag_msg_.header.stamp = this->get_clock()->now();
                             // IMU will still return infrequent magnetic field reports even if the report
