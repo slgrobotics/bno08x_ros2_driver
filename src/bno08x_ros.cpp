@@ -150,6 +150,8 @@ void BNO08xROS::init_parameters() {
     this->declare_parameter<double>("imu.orientation_yaw_variance", 5e-3); //  default 0.005 means pretty trustworthy
 
     this->get_parameter("imu.orientation_yaw_variance", orientation_yaw_variance_);
+    this->declare_parameter<bool>("verbose", false);
+    this->get_parameter("verbose", verbose_);
 }
 
 /**
@@ -291,22 +293,24 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;
         uint8_t mag = this->accuracy_status_ & 0x03;
 
-        if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
-            RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
-        }
+        if(verbose_) {
+            if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
+                RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
+            }
 
-        /*
-        // Log warnings for any sensors that are currently unreliable:    
-        if(sensor_accuracy == 0) {
-            RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-        } else if (sensor_accuracy == 1) {
-            RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-        //} else if (sensor_accuracy == 2) {
-        //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-        //} else if (sensor_accuracy == 3) {
-        //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+            /*
+            // Log warnings for any sensors that are currently unreliable:    
+            if(sensor_accuracy == 0) {
+                RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+            } else if (sensor_accuracy == 1) {
+                RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+            //} else if (sensor_accuracy == 2) {
+            //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+            //} else if (sensor_accuracy == 3) {
+            //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+            }
+            */
         }
-        */
     }
 
 
