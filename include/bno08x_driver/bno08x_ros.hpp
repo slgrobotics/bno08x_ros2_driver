@@ -28,6 +28,7 @@ private:
     void reset();
     std::string sensor_name(uint8_t sensor_id);
     std::string accuracy_status_string();
+    float get_covariance_scaled(float base_variance, uint8_t accuracy);
 
     uint16_t accuracy_status_;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 

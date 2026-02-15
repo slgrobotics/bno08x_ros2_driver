@@ -259,6 +259,26 @@ std::string BNO08xROS::accuracy_status_string()
 }
 
 /**
+ * @brief Calculate covariance scaling factor based on sensor accuracy
+ * 
+ * @param accuracy The accuracy status (0=Unreliable, 1=Low, 2=Medium, 3=High)
+ * @return float Scaling factor to apply to base covariances
+ */
+float BNO08xROS::get_covariance_scaled(float base_variance, uint8_t accuracy) {
+    switch(accuracy) {
+        default:
+        case 0:
+         return -1.0;   // Unreliable - -1.0 covariance indicates invalid measurement in ROS
+        case 1:
+         return 25.0f * base_variance;    // Low accuracy - 25x base covariance
+        case 2:
+         return 5.0f * base_variance;     // Medium accuracy - 5x base covariance
+        case 3:
+         return base_variance;            // High accuracy - base covariance (no scaling)
+    }
+}
+
+/**
  * @brief Callback function for sensor events
  * 
  * @param cookie Pointer to the object that called the function, not used here
@@ -326,6 +346,12 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 this->mag_msg_.header.stamp = this->get_clock()->now();
                             // IMU will still return infrequent magnetic field reports even if the report
                             // was not enabled, so check it was enabled before publishing.
+
+                float base_mag_var = 1e-6; // Base variance for magnetic field (Tesla^2)    
+                this->mag_msg_.magnetic_field_covariance[0] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
+                this->mag_msg_.magnetic_field_covariance[4] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
+                this->mag_msg_.magnetic_field_covariance[8] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
+
                 if (publish_magnetic_field_) {
                     this->mag_publisher_->publish(this->mag_msg_);
                 }
@@ -340,11 +366,10 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             this->imu_msg_.orientation.z = sensor_value->un.rotationVector.k;
             this->imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
 
-            // Add orientation covariance (tunable):
-            this->imu_msg_.orientation_covariance[0] = 1e-4;  // roll
-            this->imu_msg_.orientation_covariance[4] = 1e-4;  // pitch
-            // 5e-3 - default for yaw (noisiest):
-            this->imu_msg_.orientation_covariance[8] = orientation_yaw_variance_;
+            // Add orientation covariance scaled by accuracy:
+            this->imu_msg_.orientation_covariance[0] = this->get_covariance_scaled(1e-4, sensor_accuracy);  // roll
+            this->imu_msg_.orientation_covariance[4] = this->get_covariance_scaled(1e-4, sensor_accuracy);  // pitch
+            this->imu_msg_.orientation_covariance[8] = this->get_covariance_scaled(orientation_yaw_variance_, sensor_accuracy);  // yaw
 
             imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
             break;
@@ -356,10 +381,13 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
             this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
 
-            // acceleration covariance (lightly trusted)
-            this->imu_msg_.linear_acceleration_covariance[0] = 0.02;
-            this->imu_msg_.linear_acceleration_covariance[4] = 0.02;
-            this->imu_msg_.linear_acceleration_covariance[8] = 0.02;
+            // acceleration covariance scaled by accuracy
+            {
+                float base_accel_var = 0.02;
+                this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+                this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+                this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+            }
 
             imu_received_flag_ |= ACCELEROMETER_RECEIVED;
             break;
@@ -370,10 +398,13 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
             this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
 
-            // gyro covariance (high-quality calibrated)
-            this->imu_msg_.angular_velocity_covariance[0] = 5e-4;
-            this->imu_msg_.angular_velocity_covariance[4] = 5e-4;
-            this->imu_msg_.angular_velocity_covariance[8] = 5e-4;
+            // gyro covariance scaled by accuracy
+            {
+                float base_gyro_var = 5e-4;
+                this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+                this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+                this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+            }
 
             imu_received_flag_ |= GYROSCOPE_RECEIVED;
             break;
