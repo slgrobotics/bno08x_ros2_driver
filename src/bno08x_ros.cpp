@@ -267,6 +267,17 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     DEBUG_LOG("Sensor Callback");
     watchdog_->reset();
 
+    // Note: we must provide realistic covariances for all fields in the Imu message,
+    //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
+
+    /* Status of a sensor
+    *   0 - Unreliable
+    *   1 - Accuracy low
+    *   2 - Accuracy medium
+    *   3 - Accuracy high
+    */
+    uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
+
     // Publish calibration status approximately once per second using elapsed time
     rclcpp::Time now = this->get_clock()->now();
     if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
@@ -274,28 +285,30 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         calib_msg.data = this->accuracy_status_string();
         calib_status_publisher_->publish(calib_msg);
         last_calib_status_publish_time_ = now;
+
+        uint8_t orient = (this->accuracy_status_ >> 6) & 0x03;
+        uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;
+        uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;
+        uint8_t mag = this->accuracy_status_ & 0x03;
+
+        if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
+            RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
+        }
+
+        /*
+        // Log warnings for any sensors that are currently unreliable:    
+        if(sensor_accuracy == 0) {
+            RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+        } else if (sensor_accuracy == 1) {
+            RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+        //} else if (sensor_accuracy == 2) {
+        //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+        //} else if (sensor_accuracy == 3) {
+        //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+        }
+        */
     }
 
-    // Note: we must provide realistic covariances for all fields in the Imu message,
-    //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
-
-    /* Status of a sensor
-     *   0 - Unreliable
-     *   1 - Accuracy low
-     *   2 - Accuracy medium
-     *   3 - Accuracy high
-     */
-    uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
-
-    if(sensor_accuracy == 0) {
-        RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-    } else if (sensor_accuracy == 1) {
-        RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-    //} else if (sensor_accuracy == 2) {
-    //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-    //} else if (sensor_accuracy == 3) {
-    //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-    }
 
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
