@@ -14,6 +14,8 @@ BNO08xROS::BNO08xROS()
     this->init_comms();
     this->init_sensor();
 
+    accuracy_status = 0; // default to all sensors having accuracy status of 0 (unreliable)
+
     if (publish_imu_) {
         this->imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu", 10);
         RCLCPP_INFO(this->get_logger(), "IMU Publisher created");
@@ -195,6 +197,62 @@ void BNO08xROS::init_sensor() {
 }   
 
 /**
+ * @brief Get the sensor name from the sensor ID
+ * 
+ * @param sensor_id The sensor ID from the BNO08x sensor event
+ * @return std::string The human-readable name of the sensor
+ */
+std::string BNO08xROS::sensor_name(uint8_t sensor_id)
+{
+    switch(sensor_id){
+        case SH2_MAGNETIC_FIELD_CALIBRATED:
+            return "Calibrated Magnetic Field";
+        case SH2_ROTATION_VECTOR:
+            return "Rotation Vector";
+        case SH2_ACCELEROMETER:
+            return "Accelerometer";
+        case SH2_GYROSCOPE_CALIBRATED:
+            return "Calibrated Gyroscope";
+        default:
+            return "Unknown Sensor";
+    }
+}
+
+/**
+ * @brief Convert the accuracy status bitfield to a human-readable string
+ * 
+ * The accuracy_status variable is a bitfield where:
+ *   bits 0-1: Mag accuracy
+ *   bits 2-3: Accel accuracy
+ *   bits 4-5: Gyro accuracy
+ *   bits 6-7: Rotation Vector (system) accuracy
+ * 
+ * Each sensor's accuracy is represented as:
+ *   0 - Unreliable
+ *   1 - Accuracy low
+ *   2 - Accuracy medium
+ *   3 - Accuracy high
+ * 
+ * @return std::string A JSON-like string representing the accuracy of each sensor
+ */
+std::string BNO08xROS::accuracy_status_string()
+{
+    uint8_t orient = (this->accuracy_status >> 6) & 0x03;
+    uint8_t gyro = (this->accuracy_status >> 4) & 0x03;
+    uint8_t accel = (this->accuracy_status >> 2) & 0x03;
+    uint8_t mag = this->accuracy_status & 0x03;
+
+    std::string result = "{";
+    result += "\"sys\":" + std::to_string(orient) + ",";
+    result += "\"gyro\":" + std::to_string(gyro) + ",";
+    result += "\"accel\":" + std::to_string(accel) + ",";
+    result += "\"mag\":" + std::to_string(mag);
+    result += "}";
+
+    return result;
+}
+
+/**
  * @brief Callback function for sensor events
  * 
  * @param cookie Pointer to the object that called the function, not used here
@@ -208,9 +266,28 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     // Note: we must provide realistic covariances for all fields in the Imu message,
     //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
 
+    /* Status of a sensor
+     *   0 - Unreliable
+     *   1 - Accuracy low
+     *   2 - Accuracy medium
+     *   3 - Accuracy high
+     */
+    uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
+
+    if(sensor_accuracy == 0) {
+        RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+    } else if (sensor_accuracy == 1) {
+        RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+    //} else if (sensor_accuracy == 2) {
+    //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+    //} else if (sensor_accuracy == 3) {
+    //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+    }
+
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
             {
+                accuracy_status = (accuracy_status & 0xFFFC) | (sensor_accuracy << 0); // Update bits 0-1 for Mag accuracy
                 float to_tesla = 1e-6; // Convert microTesla to Tesla
                 this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
                 this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y * to_tesla;
@@ -226,6 +303,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
 
         case SH2_ROTATION_VECTOR: {
+            accuracy_status = (accuracy_status & 0xFF3F) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
             // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
             this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
             this->imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
@@ -243,6 +321,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         }
 
         case SH2_ACCELEROMETER:
+            accuracy_status = (accuracy_status & 0xFFF3) | (sensor_accuracy << 2); // Update bits 2-3 for Accel accuracy
             this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
             this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
             this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
@@ -256,6 +335,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
 
         case SH2_GYROSCOPE_CALIBRATED:
+            accuracy_status = (accuracy_status & 0xFFCF) | (sensor_accuracy << 4); // Update bits 4-5 for Gyro accuracy
             this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
             this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
             this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;

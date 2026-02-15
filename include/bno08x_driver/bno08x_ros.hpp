@@ -25,6 +25,9 @@ private:
     void init_sensor();
     void poll_timer_callback();
     void reset();
+    std::string sensor_name(uint8_t sensor_id);
+    std::string accuracy_status_string();
+    uint16_t accuracy_status;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 
     // ROS Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
