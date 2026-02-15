@@ -288,6 +288,7 @@ float BNO08xROS::get_covariance_scaled(float base_variance, uint8_t accuracy) {
 void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     DEBUG_LOG("Sensor Callback");
     watchdog_->reset();
+    rclcpp::Time now = this->get_clock()->now();
 
     // Note: we must provide realistic covariances for all fields in the Imu message,
     //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
@@ -301,7 +302,6 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
 
     // Publish calibration status approximately once per second using elapsed time
-    rclcpp::Time now = this->get_clock()->now();
     if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
         std_msgs::msg::String calib_msg;
         calib_msg.data = this->accuracy_status_string();
@@ -337,13 +337,13 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
             {
-                accuracy_status_ = (accuracy_status_ & 0xFFFC) | (sensor_accuracy << 0); // Update bits 0-1 for Mag accuracy
+                accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (sensor_accuracy << 0); // Update bits 0-1 for Mag accuracy
                 float to_tesla = 1e-6; // Convert microTesla to Tesla
                 this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
                 this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y * to_tesla;
                 this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z * to_tesla;
                 this->mag_msg_.header.frame_id = this->frame_id_;
-                this->mag_msg_.header.stamp = this->get_clock()->now();
+                this->mag_msg_.header.stamp = now;
                             // IMU will still return infrequent magnetic field reports even if the report
                             // was not enabled, so check it was enabled before publishing.
 
@@ -359,7 +359,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
 
         case SH2_ROTATION_VECTOR: {
-            accuracy_status_ = (accuracy_status_ & 0xFF3F) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
+            accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
             // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
             this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
             this->imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
@@ -376,7 +376,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         }
 
         case SH2_ACCELEROMETER:
-            accuracy_status_ = (accuracy_status_ & 0xFFF3) | (sensor_accuracy << 2); // Update bits 2-3 for Accel accuracy
+            accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (sensor_accuracy << 2); // Update bits 2-3 for Accel accuracy
             this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
             this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
             this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
@@ -393,7 +393,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
 
         case SH2_GYROSCOPE_CALIBRATED:
-            accuracy_status_ = (accuracy_status_ & 0xFFCF) | (sensor_accuracy << 4); // Update bits 4-5 for Gyro accuracy
+            accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (sensor_accuracy << 4); // Update bits 4-5 for Gyro accuracy
             this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
             this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
             this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
@@ -418,7 +418,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
        (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
     {
         this->imu_msg_.header.frame_id = this->frame_id_;
-        this->imu_msg_.header.stamp = this->get_clock()->now();
+        this->imu_msg_.header.stamp = now;
         this->imu_publisher_->publish(this->imu_msg_);
         imu_received_flag_ = 0;
     }

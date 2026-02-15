@@ -30,6 +30,11 @@ private:
     std::string accuracy_status_string();
     float get_covariance_scaled(float base_variance, uint8_t accuracy);
 
+    constexpr uint16_t MAG_MASK   = 0x0003; // bits 0-1
+    constexpr uint16_t ACC_MASK   = 0x000C; // bits 2-3
+    constexpr uint16_t GYR_MASK   = 0x0030; // bits 4-5
+    constexpr uint16_t RV_MASK    = 0x00C0; // bits 6-7
+
     uint16_t accuracy_status_;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 
     // ROS Publishers
