@@ -6,6 +6,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include "bno08x_driver/bno08x.hpp"
 #include "bno08x_driver/logger.h"
@@ -27,14 +28,17 @@ private:
     void reset();
     std::string sensor_name(uint8_t sensor_id);
     std::string accuracy_status_string();
-    uint16_t accuracy_status;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
+
+    uint16_t accuracy_status_;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 
     // ROS Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_publisher_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr calib_status_publisher_;
     sensor_msgs::msg::Imu imu_msg_;
     sensor_msgs::msg::MagneticField mag_msg_;
     uint8_t imu_received_flag_;
+    rclcpp::Time last_calib_status_publish_time_;
 
     // ROS Timer
     rclcpp::TimerBase::SharedPtr poll_timer_;
