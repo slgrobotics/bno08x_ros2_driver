@@ -306,38 +306,6 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     */
     uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
 
-    // Publish calibration status approximately once per second using elapsed time
-    if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
-        std_msgs::msg::String calib_msg;
-        calib_msg.data = this->accuracy_status_string();
-        calib_status_publisher_->publish(calib_msg);
-        last_calib_status_publish_time_ = now;
-
-        uint8_t orient = (this->accuracy_status_ >> 6) & 0x03; // bits 6-7
-        uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;   // bits 4-5
-        uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;  // bits 2-3
-        uint8_t mag = this->accuracy_status_ & 0x03;           // bits 0-1
-
-        if(verbose_) {
-            if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
-                RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
-            }
-
-            /*
-            // Log warnings for any sensors that are currently unreliable:    
-            if(sensor_accuracy == 0) {
-                RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-            } else if (sensor_accuracy == 1) {
-                RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-            //} else if (sensor_accuracy == 2) {
-            //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-            //} else if (sensor_accuracy == 3) {
-            //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
-            }
-            */
-        }
-    }
-
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
             accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 0); // Update bits 0-1 for Mag accuracy
@@ -393,16 +361,36 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             }
 
         case SH2_GYROSCOPE_CALIBRATED: {
+                // TODO: it looks like gyro accuracy is always 0? does 0 indicate "unavailable"?
                 accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 4); // Update bits 4-5 for Gyro accuracy
                 this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
                 this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
                 this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
 
-                // gyro covariance scaled by accuracy
+                // gyro covariance scaled by accuracy.
+                // Hack: if gyro accuracy is unavailable (0), fall back to rotation-vector (system) accuracy, then accel, then mag.
                 float base_gyro_var = 5e-4;
-                this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-                this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-                this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+                uint8_t eff_acc = sensor_accuracy;
+                if (eff_acc == 0) {
+                    // try rotation vector (system) accuracy (bits 6-7)
+                    eff_acc = (this->accuracy_status_ >> 6) & 0x03;
+                }
+                if (eff_acc == 0) {
+                    // try accel accuracy (bits 2-3)
+                    eff_acc = (this->accuracy_status_ >> 2) & 0x03;
+                }
+                if (eff_acc == 0) {
+                    // try mag accuracy (bits 0-1)
+                    eff_acc = this->accuracy_status_ & 0x03;
+                }
+
+                // if (verbose_ && eff_acc != sensor_accuracy) {
+                //     RCLCPP_INFO(this->get_logger(), "Gyro accuracy missing; falling back to accuracy=%d", eff_acc);
+                // }
+
+                this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, eff_acc);
+                this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, eff_acc);
+                this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, eff_acc);
 
                 imu_received_flag_ |= GYROSCOPE_RECEIVED;
                 break;
@@ -419,6 +407,38 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         this->imu_msg_.header.stamp = now;
         this->imu_publisher_->publish(this->imu_msg_);
         imu_received_flag_ = 0;
+
+        // Publish calibration status approximately once per second using elapsed time
+        if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
+            std_msgs::msg::String calib_msg;
+            calib_msg.data = this->accuracy_status_string();
+            calib_status_publisher_->publish(calib_msg);
+            last_calib_status_publish_time_ = now;
+
+            uint8_t orient = (this->accuracy_status_ >> 6) & 0x03; // bits 6-7
+            uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;   // bits 4-5
+            uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;  // bits 2-3
+            uint8_t mag = this->accuracy_status_ & 0x03;           // bits 0-1
+
+            if(verbose_) {
+                if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
+                    RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
+                }
+
+                /*
+                // Log warnings for any sensors that are currently unreliable:    
+                if(sensor_accuracy == 0) {
+                    RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                } else if (sensor_accuracy == 1) {
+                    RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                //} else if (sensor_accuracy == 2) {
+                //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                //} else if (sensor_accuracy == 3) {
+                //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                }
+                */
+            }
+        }
     }
 }
 
