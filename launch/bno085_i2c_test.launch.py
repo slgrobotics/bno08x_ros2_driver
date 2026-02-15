@@ -24,6 +24,7 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[{
                 'frame_id': 'imu_link',
+                'verbose': True,
                 'i2c.enabled': True,
                 'i2c.bus': "/dev/i2c-1",
                 'i2c.address': "0x4B",
