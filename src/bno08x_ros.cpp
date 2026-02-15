@@ -243,10 +243,10 @@ std::string BNO08xROS::sensor_name(uint8_t sensor_id)
  */
 std::string BNO08xROS::accuracy_status_string()
 {
-    uint8_t orient = (this->accuracy_status_ >> 6) & 0x03;
-    uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;
-    uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;
-    uint8_t mag = this->accuracy_status_ & 0x03;
+    uint8_t orient = (this->accuracy_status_ >> 6) & 0x03; // bits 6-7
+    uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;   // bits 4-5
+    uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;  // bits 2-3
+    uint8_t mag = this->accuracy_status_ & 0x03;           // bits 0-1
 
     std::string result = "{";
     result += "\"sys\":" + std::to_string(orient) + ",";
@@ -308,10 +308,10 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         calib_status_publisher_->publish(calib_msg);
         last_calib_status_publish_time_ = now;
 
-        uint8_t orient = (this->accuracy_status_ >> 6) & 0x03;
-        uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;
-        uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;
-        uint8_t mag = this->accuracy_status_ & 0x03;
+        uint8_t orient = (this->accuracy_status_ >> 6) & 0x03; // bits 6-7
+        uint8_t gyro = (this->accuracy_status_ >> 4) & 0x03;   // bits 4-5
+        uint8_t accel = (this->accuracy_status_ >> 2) & 0x03;  // bits 2-3
+        uint8_t mag = this->accuracy_status_ & 0x03;           // bits 0-1
 
         if(verbose_) {
             if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
