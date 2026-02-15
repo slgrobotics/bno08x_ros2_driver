@@ -36,7 +36,7 @@ BNO08xROS::BNO08xROS()
     // Poll the sensor at the rate of the fastest sensor
     this->imu_received_flag_ = 0;
 
-    # as we only fill diagonals, zero out the rest of covariances
+    // as we only fill diagonals, zero out the rest of covariances
     std::fill(std::begin(imu_msg_.orientation_covariance), std::end(imu_msg_.orientation_covariance), 0.0);
     std::fill(std::begin(imu_msg_.linear_acceleration_covariance), std::end(imu_msg_.linear_acceleration_covariance), 0.0);
     std::fill(std::begin(imu_msg_.angular_velocity_covariance), std::end(imu_msg_.angular_velocity_covariance), 0.0);
@@ -360,7 +360,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             }
             break;
 
-        case SH2_ROTATION_VECTOR: {
+        case SH2_ROTATION_VECTOR:
             accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 6); // Update bits 6-7 for Rotation Vector accuracy
             // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
             this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
@@ -375,38 +375,38 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
             imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
             break;
+
+        case SH2_ACCELEROMETER: {
+                accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 2); // Update bits 2-3 for Accel accuracy
+                this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
+                this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
+                this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
+
+                // acceleration covariance scaled by accuracy
+                float base_accel_var = 0.02;
+                this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+                this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+                this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+
+                imu_received_flag_ |= ACCELEROMETER_RECEIVED;
+                break;
+            }
+
+        case SH2_GYROSCOPE_CALIBRATED: {
+                accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 4); // Update bits 4-5 for Gyro accuracy
+                this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
+                this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
+                this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
+
+                // gyro covariance scaled by accuracy
+                float base_gyro_var = 5e-4;
+                this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+                this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+                this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+
+                imu_received_flag_ |= GYROSCOPE_RECEIVED;
+                break;
         }
-
-        case SH2_ACCELEROMETER:
-            accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 2); // Update bits 2-3 for Accel accuracy
-            this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
-            this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
-            this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
-
-            // acceleration covariance scaled by accuracy
-            float base_accel_var = 0.02;
-            this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-            this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-            this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-
-            imu_received_flag_ |= ACCELEROMETER_RECEIVED;
-            break;
-
-        case SH2_GYROSCOPE_CALIBRATED:
-            accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 4); // Update bits 4-5 for Gyro accuracy
-            this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
-            this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
-            this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
-
-            // gyro covariance scaled by accuracy
-            float base_gyro_var = 5e-4;
-            this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-            this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-            this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-
-            imu_received_flag_ |= GYROSCOPE_RECEIVED;
-            break;
-
         default:
             break;
     }
