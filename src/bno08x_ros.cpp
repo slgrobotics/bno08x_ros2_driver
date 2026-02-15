@@ -35,17 +35,19 @@ BNO08xROS::BNO08xROS()
 
     // Poll the sensor at the rate of the fastest sensor
     this->imu_received_flag_ = 0;
-    if(this->imu_rate_ < this->magnetic_field_rate_){
-        this->poll_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(1000/this->magnetic_field_rate_), // Hz to ms
-            std::bind(&BNO08xROS::poll_timer_callback, this)
-        );
-    } else {
-        this->poll_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(1000/this->imu_rate_), // Hz to ms
-            std::bind(&BNO08xROS::poll_timer_callback, this)
-        );
-    }
+
+    # as we only fill diagonals, zero out the rest of covariances
+    std::fill(std::begin(imu_msg_.orientation_covariance), std::end(imu_msg_.orientation_covariance), 0.0);
+    std::fill(std::begin(imu_msg_.linear_acceleration_covariance), std::end(imu_msg_.linear_acceleration_covariance), 0.0);
+    std::fill(std::begin(imu_msg_.angular_velocity_covariance), std::end(imu_msg_.angular_velocity_covariance), 0.0);
+
+    std::fill(std::begin(mag_msg_.magnetic_field_covariance), std::end(mag_msg_.magnetic_field_covariance), 0.0);
+
+    const int poll_hz = std::max(imu_rate_, magnetic_field_rate_);
+    using namespace std::chrono_literals;
+    poll_timer_ = create_wall_timer(
+        std::chrono::duration<double>(1.0 / poll_hz),
+        std::bind(&BNO08xROS::poll_timer_callback, this));
 
     // Initialize the watchdog timer
     auto timeout = std::chrono::milliseconds(2000);
@@ -288,6 +290,9 @@ float BNO08xROS::get_covariance_scaled(float base_variance, uint8_t accuracy) {
 void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     DEBUG_LOG("Sensor Callback");
     watchdog_->reset();
+
+    if (!rclcpp::ok()) return;
+
     rclcpp::Time now = this->get_clock()->now();
 
     // Note: we must provide realistic covariances for all fields in the Imu message,
@@ -333,33 +338,30 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         }
     }
 
-
     switch(sensor_value->sensorId){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
-            {
-                accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (sensor_accuracy << 0); // Update bits 0-1 for Mag accuracy
+            accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 0); // Update bits 0-1 for Mag accuracy
+            if (publish_magnetic_field_ && sensor_accuracy > 0) { // Only publish if magnetic field report is enabled and accuracy is not unreliable
                 float to_tesla = 1e-6; // Convert microTesla to Tesla
                 this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
                 this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y * to_tesla;
                 this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z * to_tesla;
                 this->mag_msg_.header.frame_id = this->frame_id_;
                 this->mag_msg_.header.stamp = now;
-                            // IMU will still return infrequent magnetic field reports even if the report
-                            // was not enabled, so check it was enabled before publishing.
+                // IMU will still return infrequent magnetic field reports even if the report
+                // was not enabled, so check it was enabled before publishing.
 
-                float base_mag_var = 1e-6; // Base variance for magnetic field (Tesla^2)    
+                float base_mag_var = 1e-10; // Base variance for magnetic field, 1e-10 to 1e-9 Tesla² (stddev 10–30 µT) depending on calibration.
                 this->mag_msg_.magnetic_field_covariance[0] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[4] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[8] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
 
-                if (publish_magnetic_field_) {
-                    this->mag_publisher_->publish(this->mag_msg_);
-                }
+                this->mag_publisher_->publish(this->mag_msg_);
             }
             break;
 
         case SH2_ROTATION_VECTOR: {
-            accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
+            accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 6); // Update bits 6-7 for Rotation Vector accuracy
             // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
             this->imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
             this->imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
@@ -376,35 +378,31 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         }
 
         case SH2_ACCELEROMETER:
-            accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (sensor_accuracy << 2); // Update bits 2-3 for Accel accuracy
+            accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 2); // Update bits 2-3 for Accel accuracy
             this->imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
             this->imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
             this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
 
             // acceleration covariance scaled by accuracy
-            {
-                float base_accel_var = 0.02;
-                this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-                this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-                this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
-            }
+            float base_accel_var = 0.02;
+            this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+            this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
+            this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
 
             imu_received_flag_ |= ACCELEROMETER_RECEIVED;
             break;
 
         case SH2_GYROSCOPE_CALIBRATED:
-            accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (sensor_accuracy << 4); // Update bits 4-5 for Gyro accuracy
+            accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 4); // Update bits 4-5 for Gyro accuracy
             this->imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
             this->imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
             this->imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
 
             // gyro covariance scaled by accuracy
-            {
-                float base_gyro_var = 5e-4;
-                this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-                this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-                this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
-            }
+            float base_gyro_var = 5e-4;
+            this->imu_msg_.angular_velocity_covariance[0] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+            this->imu_msg_.angular_velocity_covariance[4] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
+            this->imu_msg_.angular_velocity_covariance[8] = this->get_covariance_scaled(base_gyro_var, sensor_accuracy);
 
             imu_received_flag_ |= GYROSCOPE_RECEIVED;
             break;
@@ -439,7 +437,10 @@ void BNO08xROS::poll_timer_callback() {
 }
 
 void BNO08xROS::reset() {
-    std::lock_guard<std::mutex> lock(bno08x_mutex_);
-    delete bno08x_;
-    this->init_sensor();
+  std::lock_guard<std::mutex> lock(bno08x_mutex_);
+  imu_received_flag_ = 0;
+  accuracy_status_ = 0;
+  delete bno08x_;
+  bno08x_ = nullptr;
+  init_sensor();
 }

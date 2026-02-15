@@ -35,7 +35,7 @@ private:
     static constexpr uint16_t GYR_MASK   = 0x0030; // bits 4-5
     static constexpr uint16_t RV_MASK    = 0x00C0; // bits 6-7
 
-    uint16_t accuracy_status_;  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
+    uint16_t accuracy_status_{0};  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 
     // ROS Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
@@ -43,19 +43,19 @@ private:
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr calib_status_publisher_;
     sensor_msgs::msg::Imu imu_msg_;
     sensor_msgs::msg::MagneticField mag_msg_;
-    uint8_t imu_received_flag_;
+    uint8_t imu_received_flag_{0};
     rclcpp::Time last_calib_status_publish_time_;
 
     // ROS Timer
     rclcpp::TimerBase::SharedPtr poll_timer_;
 
     // BNO08X Sensor Interface
-    BNO08x* bno08x_;
+    BNO08x* bno08x_{nullptr};
     std::mutex bno08x_mutex_;
-    CommInterface* comm_interface_;
+    CommInterface* comm_interface_{nullptr};
 
     // Watchdog
-    Watchdog* watchdog_;
+    Watchdog* watchdog_{nullptr};
 
     // Parameters
     std::string frame_id_;
