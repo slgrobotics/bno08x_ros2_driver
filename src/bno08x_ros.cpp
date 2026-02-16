@@ -295,6 +295,17 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
     rclcpp::Time now = this->get_clock()->now();
 
+    // Start bundle timing if this is the first component
+    if (!imu_bundle_active_) {
+        imu_bundle_active_ = true;
+        imu_bundle_start_time_ = now;
+    } else if ((now - imu_bundle_start_time_).seconds() > IMU_BUNDLE_TIMEOUT_SEC) {
+        // If bundle takes too long, discard and restart
+        imu_received_flag_ = 0;
+        imu_bundle_active_ = false;
+        return;   // discard this late message, restart bundle with next message
+    }
+
     // Note: we must provide realistic covariances for all fields in the Imu message,
     //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
 
@@ -399,14 +410,17 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             break;
     }
 
-    // Publish only when all three reports are ready
+    // Publish only when all three reports are ready and are from the same bundle 
+    // (i.e. received since last publish and within a short time window of each other)
     if (imu_received_flag_ ==
        (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
     {
         this->imu_msg_.header.frame_id = this->frame_id_;
         this->imu_msg_.header.stamp = now;
         this->imu_publisher_->publish(this->imu_msg_);
+
         imu_received_flag_ = 0;
+        imu_bundle_active_ = false;   // ready for next bundle
 
         // Publish calibration status approximately once per second using elapsed time
         if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
@@ -459,6 +473,7 @@ void BNO08xROS::poll_timer_callback() {
 void BNO08xROS::reset() {
   std::lock_guard<std::mutex> lock(bno08x_mutex_);
   imu_received_flag_ = 0;
+  imu_bundle_active_ = false;
   accuracy_status_ = 0;
   delete bno08x_;
   bno08x_ = nullptr;
