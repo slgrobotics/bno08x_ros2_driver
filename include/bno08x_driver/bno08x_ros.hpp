@@ -28,13 +28,13 @@ private:
     void reset();
     std::string sensor_name(uint8_t sensor_id);
     std::string accuracy_status_string();
-    float get_covariance_scaled(float base_variance, uint8_t accuracy);
 
     using acc_stat_t = uint8_t;
-    static constexpr acc_stat_t MAG_MASK   = 0x0003; // bits 0-1
-    static constexpr acc_stat_t ACC_MASK   = 0x000C; // bits 2-3
-    static constexpr acc_stat_t GYR_MASK   = 0x0030; // bits 4-5
-    static constexpr acc_stat_t RV_MASK    = 0x00C0; // bits 6-7
+    float get_covariance_scaled(float base_variance, acc_stat_t accuracy);
+    static constexpr acc_stat_t MAG_MASK   = 0x03; // bits 0-1
+    static constexpr acc_stat_t ACC_MASK   = 0x0C; // bits 2-3
+    static constexpr acc_stat_t GYR_MASK   = 0x30; // bits 4-5
+    static constexpr acc_stat_t RV_MASK    = 0xC0; // bits 6-7
 
     acc_stat_t accuracy_status_{0};  // bits 0-1 Mag, bits 2-3 Accel, bits 4-5 Gyro, bits 6-7 Rotation Vector
 

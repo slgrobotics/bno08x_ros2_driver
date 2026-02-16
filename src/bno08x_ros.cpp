@@ -53,10 +53,6 @@ BNO08xROS::BNO08xROS()
 
     std::fill(std::begin(mag_msg_.magnetic_field_covariance), std::end(mag_msg_.magnetic_field_covariance), 0.0);
 
-    // clamp to 1 Hz in case user set rates to 0 or negative
-    imu_rate_ = std::max(1, imu_rate_);
-    magnetic_field_rate_ = std::max(1, magnetic_field_rate_);
-
     const int poll_hz = std::max(imu_rate_, magnetic_field_rate_);
     poll_timer_ = create_wall_timer(
                       std::chrono::duration<double>(1.0 / poll_hz),
@@ -162,6 +158,11 @@ void BNO08xROS::init_parameters() {
     this->get_parameter("publish.magnetic_field.rate", magnetic_field_rate_);
     this->get_parameter("publish.imu.enabled", publish_imu_);
     this->get_parameter("publish.imu.rate", imu_rate_);
+
+    // clamp to 1 Hz in case user set rates to 0 or negative
+    imu_rate_ = std::max(1, imu_rate_);
+    magnetic_field_rate_ = std::max(1, magnetic_field_rate_);
+
     this->declare_parameter<double>("imu.orientation_yaw_variance", 7.5e-3); //  default 0.0075 (≈5°) means pretty trustworthy
 
     this->get_parameter("imu.orientation_yaw_variance", orientation_yaw_variance_);
