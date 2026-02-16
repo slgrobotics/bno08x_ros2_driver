@@ -149,7 +149,7 @@ void BNO08xROS::init_parameters() {
     this->get_parameter("publish.magnetic_field.rate", magnetic_field_rate_);
     this->get_parameter("publish.imu.enabled", publish_imu_);
     this->get_parameter("publish.imu.rate", imu_rate_);
-    this->declare_parameter<double>("imu.orientation_yaw_variance", 5e-3); //  default 0.005 means pretty trustworthy
+    this->declare_parameter<double>("imu.orientation_yaw_variance", 7.5e-3); //  default 0.0075 (≈5°) means pretty trustworthy
 
     this->get_parameter("imu.orientation_yaw_variance", orientation_yaw_variance_);
     this->declare_parameter<bool>("verbose", false);
@@ -319,7 +319,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 // IMU will still return infrequent magnetic field reports even if the report
                 // was not enabled, so check it was enabled before publishing.
 
-                float base_mag_var = 1e-10; // Base variance for magnetic field, 1e-10 to 1e-9 Tesla² (stddev 10–30 µT) depending on calibration.
+                float base_mag_var = 1e-11; // Base variance for magnetic field, 1e-11 (stddev ~3.2 µT).
                 this->mag_msg_.magnetic_field_covariance[0] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[4] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[8] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
@@ -337,8 +337,8 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             this->imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
 
             // Add orientation covariance scaled by accuracy:
-            this->imu_msg_.orientation_covariance[0] = this->get_covariance_scaled(1e-4, sensor_accuracy);  // roll
-            this->imu_msg_.orientation_covariance[4] = this->get_covariance_scaled(1e-4, sensor_accuracy);  // pitch
+            this->imu_msg_.orientation_covariance[0] = this->get_covariance_scaled(3e-4, sensor_accuracy);  // roll
+            this->imu_msg_.orientation_covariance[4] = this->get_covariance_scaled(3e-4, sensor_accuracy);  // pitch
             this->imu_msg_.orientation_covariance[8] = this->get_covariance_scaled(orientation_yaw_variance_, sensor_accuracy);  // yaw
 
             imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
@@ -351,7 +351,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
 
                 // acceleration covariance scaled by accuracy
-                float base_accel_var = 0.02;
+                float base_accel_var = 0.04; // 0.04 (stddev ~0.2 m/s²) is reasonable.
                 this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
                 this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
                 this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
@@ -369,7 +369,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
                 // gyro covariance scaled by accuracy.
                 // Hack: if gyro accuracy is unavailable (0), fall back to rotation-vector (system) accuracy, then accel, then mag.
-                float base_gyro_var = 5e-4;
+                float base_gyro_var = 5e-4 // (stddev ~0.022 rad/s) is reasonable;
                 uint8_t eff_acc = sensor_accuracy;
                 if (eff_acc == 0) {
                     // try rotation vector (system) accuracy (bits 6-7)

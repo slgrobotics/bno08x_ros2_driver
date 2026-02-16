@@ -26,13 +26,13 @@ def generate_launch_description():
                 'frame_id': 'imu_link',
                 'verbose': True,
                 'i2c.enabled': True,
-                'i2c.bus': "/dev/i2c-1",
-                'i2c.address': "0x4B",
+                'i2c.bus': "/dev/i2c-1", # I2C bus device (bus "1" is default on Raspberry Pi, use "ls /dev/i2c*")
+                'i2c.address': "0x4B",   # I2C address (0x4A or 0x4B depending on the board configuration, use "i2cdetect -y 1")
                 'publish.magnetic_field.enabled': True,
                 'publish.magnetic_field.rate': 60,   # max 100 Hz
                 'publish.imu.enabled': True,
-                'publish.imu.rate': 60,   # max 400 Hz (anything above 100Hz depends on your hardware)
-                'publish.imu.orientation_yaw_variance': 0.005
+                'publish.imu.rate': 60,  # max 400 Hz (anything above 100Hz depends on your hardware)
+                'publish.imu.orientation_yaw_variance': 0.0075  # default 0.0075 (≈5°) means pretty trustworthy
             }],
             remappings=[("imu", "imu/data"), ("magnetic_field","imu/mag")]
         ),
