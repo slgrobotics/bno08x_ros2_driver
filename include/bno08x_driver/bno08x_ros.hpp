@@ -61,6 +61,7 @@ private:
     rclcpp::Time imu_bundle_start_time_;
     bool imu_bundle_active_{false};
     static constexpr double IMU_BUNDLE_TIMEOUT_SEC = 0.05;  // 50 ms
+    rclcpp::Time imu_bundle_stamp_;
 
     // Parameters
     std::string frame_id_;

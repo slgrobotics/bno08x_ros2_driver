@@ -44,7 +44,6 @@ BNO08xROS::BNO08xROS()
     std::fill(std::begin(mag_msg_.magnetic_field_covariance), std::end(mag_msg_.magnetic_field_covariance), 0.0);
 
     const int poll_hz = std::max(imu_rate_, magnetic_field_rate_);
-    using namespace std::chrono_literals;
     poll_timer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / poll_hz),
         std::bind(&BNO08xROS::poll_timer_callback, this));
@@ -268,15 +267,17 @@ std::string BNO08xROS::accuracy_status_string()
  */
 float BNO08xROS::get_covariance_scaled(float base_variance, uint8_t accuracy) {
     switch(accuracy) {
-        default:
-        case 0:
-         return -1.0;   // Unreliable - -1.0 covariance indicates invalid measurement in ROS
-        case 1:
-         return 25.0f * base_variance;    // Low accuracy - 25x base covariance
-        case 2:
-         return 5.0f * base_variance;     // Medium accuracy - 5x base covariance
         case 3:
          return base_variance;            // High accuracy - base covariance (no scaling)
+        case 2:
+         return 5.0f * base_variance;     // Medium accuracy - 5x base covariance
+        case 1:
+         return 25.0f * base_variance;    // Low accuracy - 25x base covariance
+        case 0:
+        default:
+             // Huge variance => EKF ignores it without special-case semantics.
+             // Works better than -1 at [0] which can cause issues in some implementations.
+            return 1e6f;
     }
 }
 
@@ -293,21 +294,24 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
     if (!rclcpp::ok()) return;
 
-    rclcpp::Time now = this->get_clock()->now();
+    const auto now = this->now();
+    uint8_t sensor_id = sensor_value->sensorId;
 
-    // Start bundle timing if this is the first component
-    if (!imu_bundle_active_) {
-        imu_bundle_active_ = true;
-        imu_bundle_start_time_ = now;
-    } else if ((now - imu_bundle_start_time_).seconds() > IMU_BUNDLE_TIMEOUT_SEC) {
-        // If bundle takes too long, discard and restart
-        imu_received_flag_ = 0;
-        imu_bundle_active_ = false;
-        return;   // discard this late message, restart bundle with next message
+    if (sensor_id == SH2_ROTATION_VECTOR || sensor_id == SH2_ACCELEROMETER || sensor_id == SH2_GYROSCOPE_CALIBRATED) {
+        // one of the values that goes into imu_data bundle, so manage bundle timing and flags
+        if (!imu_bundle_active_) {
+            // Start bundle timing if this is the first component
+            imu_bundle_active_ = true;
+            imu_bundle_start_time_ = now;
+            imu_bundle_stamp_ = now;
+        } else if ((now - imu_bundle_start_time_).seconds() > IMU_BUNDLE_TIMEOUT_SEC) {
+            // If bundle takes too long, discard and restart
+            RCLCPP_WARN(this->get_logger(), "IMU data bundle timeout. flag=0x%02x Discarding incomplete bundle.", imu_received_flag_);
+            imu_received_flag_ = 0;
+            imu_bundle_active_ = false;
+            return;   // discard this late message, restart bundle with next message
+        }
     }
-
-    // Note: we must provide realistic covariances for all fields in the Imu message,
-    //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
 
     /* Status of a sensor
     *   0 - Unreliable
@@ -317,11 +321,14 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     */
     uint8_t sensor_accuracy = sensor_value->status & 0x03; // Extract accuracy bits (1-0)
 
-    switch(sensor_value->sensorId){
+    // Note: we must provide realistic covariances for all fields in the Imu message,
+    //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
+
+    switch(sensor_id){
         case SH2_MAGNETIC_FIELD_CALIBRATED:
             accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 0); // Update bits 0-1 for Mag accuracy
             if (publish_magnetic_field_ && sensor_accuracy > 0) { // Only publish if magnetic field report is enabled and accuracy is not unreliable
-                float to_tesla = 1e-6; // Convert microTesla to Tesla
+                float to_tesla = 1e-6f; // Convert microTesla to Tesla
                 this->mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
                 this->mag_msg_.magnetic_field.y = sensor_value->un.magneticField.y * to_tesla;
                 this->mag_msg_.magnetic_field.z = sensor_value->un.magneticField.z * to_tesla;
@@ -330,7 +337,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 // IMU will still return infrequent magnetic field reports even if the report
                 // was not enabled, so check it was enabled before publishing.
 
-                float base_mag_var = 1e-11; // Base variance for magnetic field, 1e-11 (stddev ~3.2 µT).
+                float base_mag_var = 1e-11f; // Base variance for magnetic field, 1e-11 (stddev ~3.2 µT).
                 this->mag_msg_.magnetic_field_covariance[0] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[4] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
                 this->mag_msg_.magnetic_field_covariance[8] = this->get_covariance_scaled(base_mag_var, sensor_accuracy);
@@ -348,9 +355,9 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             this->imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
 
             // Add orientation covariance scaled by accuracy:
-            this->imu_msg_.orientation_covariance[0] = this->get_covariance_scaled(3e-4, sensor_accuracy);  // roll
-            this->imu_msg_.orientation_covariance[4] = this->get_covariance_scaled(3e-4, sensor_accuracy);  // pitch
-            this->imu_msg_.orientation_covariance[8] = this->get_covariance_scaled(orientation_yaw_variance_, sensor_accuracy);  // yaw
+            this->imu_msg_.orientation_covariance[0] = this->get_covariance_scaled(3e-4f, sensor_accuracy);  // roll
+            this->imu_msg_.orientation_covariance[4] = this->get_covariance_scaled(3e-4f, sensor_accuracy);  // pitch
+            this->imu_msg_.orientation_covariance[8] = this->get_covariance_scaled(static_cast<float>(orientation_yaw_variance_), sensor_accuracy);  // yaw
 
             imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
             break;
@@ -362,7 +369,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 this->imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
 
                 // acceleration covariance scaled by accuracy
-                float base_accel_var = 0.04; // 0.04 (stddev ~0.2 m/s²) is reasonable.
+                float base_accel_var = 0.04f; // 0.04 (stddev ~0.2 m/s²) is reasonable.
                 this->imu_msg_.linear_acceleration_covariance[0] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
                 this->imu_msg_.linear_acceleration_covariance[4] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
                 this->imu_msg_.linear_acceleration_covariance[8] = this->get_covariance_scaled(base_accel_var, sensor_accuracy);
@@ -380,7 +387,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
                 // gyro covariance scaled by accuracy.
                 // Hack: if gyro accuracy is unavailable (0), fall back to rotation-vector (system) accuracy, then accel, then mag.
-                float base_gyro_var = 5e-4 // (stddev ~0.022 rad/s) is reasonable;
+                float base_gyro_var = 5e-4f; // (stddev ~0.022 rad/s) is reasonable;
                 uint8_t eff_acc = sensor_accuracy;
                 if (eff_acc == 0) {
                     // try rotation vector (system) accuracy (bits 6-7)
@@ -416,7 +423,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
        (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
     {
         this->imu_msg_.header.frame_id = this->frame_id_;
-        this->imu_msg_.header.stamp = now;
+        this->imu_msg_.header.stamp = imu_bundle_stamp_;  // time of the first report in the bundle, for better synchronization
         this->imu_publisher_->publish(this->imu_msg_);
 
         imu_received_flag_ = 0;
@@ -442,13 +449,13 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 /*
                 // Log warnings for any sensors that are currently unreliable:    
                 if(sensor_accuracy == 0) {
-                    RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                    RCLCPP_WARN(this->get_logger(), "UNRELIABLE accuracy sensor ID: %s", this->sensor_name(sensor_id).c_str());
                 } else if (sensor_accuracy == 1) {
-                    RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                    RCLCPP_INFO(this->get_logger(), "LOW accuracy sensor ID: %s", this->sensor_name(sensor_id).c_str());
                 //} else if (sensor_accuracy == 2) {
-                //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                //    RCLCPP_INFO(this->get_logger(), "MEDIUM accuracy sensor ID: %s", this->sensor_name(sensor_id).c_str());
                 //} else if (sensor_accuracy == 3) {
-                //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_value->sensorId).c_str());
+                //    RCLCPP_INFO(this->get_logger(), "HIGH accuracy sensor ID: %s", this->sensor_name(sensor_id).c_str());
                 }
                 */
             }
