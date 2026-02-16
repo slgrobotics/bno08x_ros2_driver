@@ -53,6 +53,10 @@ BNO08xROS::BNO08xROS()
 
     std::fill(std::begin(mag_msg_.magnetic_field_covariance), std::end(mag_msg_.magnetic_field_covariance), 0.0);
 
+    // clamp to 1 Hz in case user set rates to 0 or negative
+    imu_rate_ = std::max(1, imu_rate_);
+    magnetic_field_rate_ = std::max(1, magnetic_field_rate_);
+
     const int poll_hz = std::max(imu_rate_, magnetic_field_rate_);
     poll_timer_ = create_wall_timer(
                       std::chrono::duration<double>(1.0 / poll_hz),
@@ -189,21 +193,21 @@ void BNO08xROS::init_sensor() {
 
     if (publish_magnetic_field_) {
         if(!bno08x_->enable_report(SH2_MAGNETIC_FIELD_CALIBRATED,
-                                         1000000/magnetic_field_rate_)) {  // Hz to us
+                                   1000000/magnetic_field_rate_)) {  // Hz to us
             RCLCPP_ERROR(this->get_logger(), "Failed to enable magnetic field sensor");
         }
     }
     if (publish_imu_) {
         if(!bno08x_->enable_report(SH2_ROTATION_VECTOR,
-                                         1000000/imu_rate_)) {             // Hz to us
+                                   1000000/imu_rate_)) {             // Hz to us
             RCLCPP_ERROR(this->get_logger(), "Failed to enable rotation vector sensor");
         }
         if(!bno08x_->enable_report(SH2_ACCELEROMETER,
-                                         1000000/imu_rate_)) {             // Hz to us
+                                   1000000/imu_rate_)) {             // Hz to us
             RCLCPP_ERROR(this->get_logger(), "Failed to enable accelerometer sensor");
         }
         if(!bno08x_->enable_report(SH2_GYROSCOPE_CALIBRATED,
-                                         1000000/imu_rate_)) {             // Hz to us
+                                   1000000/imu_rate_)) {             // Hz to us
             RCLCPP_ERROR(this->get_logger(), "Failed to enable gyroscope sensor");
         }
     }
@@ -236,7 +240,7 @@ std::string BNO08xROS::sensor_name(uint8_t sensor_id)
 }
 
 /**
- * @brief Convert the accuracy status bitfield to a human-readable  string
+ * @brief Convert the accuracy status bitfield to a human-readable JSON string
  *
  * The accuracy_status_ variable is a bitfield where:
  *   bits 0-1: Mag accuracy
@@ -254,10 +258,10 @@ std::string BNO08xROS::sensor_name(uint8_t sensor_id)
  */
 std::string BNO08xROS::accuracy_status_string()
 {
-    uint8_t orient = (accuracy_status_ >> 6) & 0x03; // bits 6-7
-    uint8_t gyro = (accuracy_status_ >> 4) & 0x03;   // bits 4-5
-    uint8_t accel = (accuracy_status_ >> 2) & 0x03;  // bits 2-3
-    uint8_t mag = accuracy_status_ & 0x03;           // bits 0-1
+    acc_stat_t orient = (accuracy_status_ >> 6) & 0x03; // bits 6-7
+    acc_stat_t gyro = (accuracy_status_ >> 4) & 0x03;   // bits 4-5
+    acc_stat_t accel = (accuracy_status_ >> 2) & 0x03;  // bits 2-3
+    acc_stat_t mag = accuracy_status_ & 0x03;           // bits 0-1
 
     std::string result = "{";
     result += "\"sys\":" + std::to_string(orient) + ",";
@@ -275,7 +279,7 @@ std::string BNO08xROS::accuracy_status_string()
  * @param accuracy The accuracy status (0=Unreliable, 1=Low, 2=Medium, 3=High)
  * @return float Scaling factor to apply to base covariances
  */
-float BNO08xROS::get_covariance_scaled(float base_variance, uint8_t accuracy) {
+float BNO08xROS::get_covariance_scaled(float base_variance, acc_stat_t accuracy) {
     switch(accuracy) {
     case 3:
         return base_variance;            // High accuracy - base covariance (no scaling)
@@ -314,13 +318,14 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
             imu_bundle_active_ = true;
             imu_bundle_start_time_ = now;
             imu_bundle_stamp_ = now;
-        } else if ((now - imu_bundle_start_time_).seconds() > IMU_BUNDLE_TIMEOUT_SEC) {
-            // If bundle takes too long, discard and restart
-            RCLCPP_WARN(this->get_logger(), "IMU data bundle timeout. flag=0x%02x Discarding incomplete bundle.", imu_received_flag_);
+        } else if ((now - imu_bundle_start_time_).seconds() >= IMU_BUNDLE_TIMEOUT_SEC) {
+            // If bundle takes too long, treat the current message as “first of a new bundle”
+            RCLCPP_WARN(this->get_logger(), "IMU data bundle timeout. flag=0x%02x. Restarting bundle.", imu_received_flag_);
             imu_received_flag_ = 0;
-            imu_bundle_active_ = false;
-            // keep imu_bundle_active_ = true
-            // continue processing this message as first of new bundle
+            imu_bundle_active_ = true;
+            imu_bundle_start_time_ = now;
+            imu_bundle_stamp_ = now;
+            // continue processing current message as first element of the new bundle
         }
     }
 
@@ -330,14 +335,14 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     *   2 - Accuracy medium
     *   3 - Accuracy high
     */
-    uint8_t sensor_accuracy = static_cast<uint8_t>(sensor_value->status & 0x03); // Extract accuracy bits (1-0)
+    acc_stat_t sensor_accuracy = static_cast<acc_stat_t>(sensor_value->status & 0x03); // Extract accuracy bits (1-0) for "accuracy_status_" mask updating and covariance scaling
 
     // Note: we must provide realistic covariances for all fields in the Imu message,
     //       see https://chatgpt.com/s/t_691b60f38e1c8191a0a309cbcf99e478
 
     switch(sensor_id) {
     case SH2_MAGNETIC_FIELD_CALIBRATED:
-        accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 0); // Update bits 0-1 for Mag accuracy
+        accuracy_status_ = (accuracy_status_ & ~MAG_MASK) | (sensor_accuracy << 0); // Update bits 0-1 for Mag accuracy
         if (publish_magnetic_field_ && sensor_accuracy > 0) { // Only publish if magnetic field report is enabled and accuracy is not unreliable
             float to_tesla = 1e-6f; // Convert microTesla to Tesla
             mag_msg_.magnetic_field.x = sensor_value->un.magneticField.x * to_tesla;
@@ -358,7 +363,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         break;
 
     case SH2_ROTATION_VECTOR:
-        accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 6); // Update bits 6-7 for Rotation Vector accuracy
+        accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
         // RAW quaternion from BNO08x (as ROS2 requires it, in REP-103 ENU reference frame):
         imu_msg_.orientation.x = sensor_value->un.rotationVector.i;
         imu_msg_.orientation.y = sensor_value->un.rotationVector.j;
@@ -374,7 +379,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         break;
 
     case SH2_ACCELEROMETER: {
-        accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 2); // Update bits 2-3 for Accel accuracy
+        accuracy_status_ = (accuracy_status_ & ~ACC_MASK) | (sensor_accuracy << 2); // Update bits 2-3 for Accel accuracy
         imu_msg_.linear_acceleration.x = sensor_value->un.accelerometer.x;
         imu_msg_.linear_acceleration.y = sensor_value->un.accelerometer.y;
         imu_msg_.linear_acceleration.z = sensor_value->un.accelerometer.z;
@@ -391,7 +396,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
 
     case SH2_GYROSCOPE_CALIBRATED: {
         // TODO: it looks like gyro accuracy is always 0? does 0 indicate "unavailable"?
-        accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (static_cast<uint16_t>(sensor_accuracy) << 4); // Update bits 4-5 for Gyro accuracy
+        accuracy_status_ = (accuracy_status_ & ~GYR_MASK) | (sensor_accuracy << 4); // Update bits 4-5 for Gyro accuracy
         imu_msg_.angular_velocity.x = sensor_value->un.gyroscope.x;
         imu_msg_.angular_velocity.y = sensor_value->un.gyroscope.y;
         imu_msg_.angular_velocity.z = sensor_value->un.gyroscope.z;
@@ -399,7 +404,7 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         // gyro covariance scaled by accuracy.
         // Hack: if gyro accuracy is unavailable (0), fall back to rotation-vector (system) accuracy, then accel, then mag.
         float base_gyro_var = 5e-4f; // (stddev ~0.022 rad/s) is reasonable;
-        uint8_t eff_acc = sensor_accuracy;
+        acc_stat_t eff_acc = sensor_accuracy;
         if (eff_acc == 0) {
             // try rotation vector (system) accuracy (bits 6-7)
             eff_acc = (accuracy_status_ >> 6) & 0x03;
@@ -431,8 +436,8 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     // Publish only when all three reports are ready and are from the same bundle
     // (i.e. received since last publish and within a short time window of each other)
     if (publish_imu_
-         && imu_publisher_ 
-         && imu_received_flag_ == (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
+            && imu_publisher_
+            && imu_received_flag_ == (ROTATION_VECTOR_RECEIVED | ACCELEROMETER_RECEIVED | GYROSCOPE_RECEIVED))
     {
         imu_msg_.header.frame_id = frame_id_;
         imu_msg_.header.stamp = imu_bundle_stamp_;  // time of the first report in the bundle, for better synchronization
@@ -441,19 +446,19 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         imu_received_flag_ = 0;
         imu_bundle_active_ = false;   // ready for next bundle
 
-        // Publish calibration status approximately once per second using elapsed time
+        // Publish calibration status approximately once per second using elapsed time.
+        // We do it here after processing an IMU bundle to ensure we have the latest accuracy status.
         if ((now - last_calib_status_publish_time_).seconds() >= 1.0) {
-            std_msgs::msg::String calib_msg;
-            calib_msg.data = accuracy_status_string();
-            calib_status_publisher_->publish(calib_msg);
+            calib_msg_.data = accuracy_status_string();
+            calib_status_publisher_->publish(calib_msg_);
             last_calib_status_publish_time_ = now;
 
-            uint8_t orient = (accuracy_status_ >> 6) & 0x03; // bits 6-7
-            uint8_t gyro = (accuracy_status_ >> 4) & 0x03;   // bits 4-5
-            uint8_t accel = (accuracy_status_ >> 2) & 0x03;  // bits 2-3
-            uint8_t mag = accuracy_status_ & 0x03;           // bits 0-1
-
             if(verbose_) {
+                const int orient = (accuracy_status_ >> 6) & 0x03;  // bits 6-7
+                const int gyro   = (accuracy_status_ >> 4) & 0x03;  // bits 4-5
+                const int accel  = (accuracy_status_ >> 2) & 0x03;  // bits 2-3
+                const int mag    =  accuracy_status_       & 0x03;  // bits 0-1
+
                 if(orient == 0 || gyro == 0 || accel == 0 || mag == 0) {
                     RCLCPP_WARN(this->get_logger(), "IMU calibration status - Sys: %d, Gyro: %d, Accel: %d, Mag: %d (0=unreliable)", orient, gyro, accel, mag);
                 }
@@ -471,7 +476,10 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
                 }
                 */
             }
-            accuracy_status_ = 0; // reset accuracy status to 0 (unreliable) after publishing, will be updated by next sensor callbacks
+
+            // reset accuracy status to 0 (unreliable) after publishing,
+            // it will be updated by next sensor callbacks, and fully filled by the time IMU bundle is published.
+            accuracy_status_ = 0;
         }
     }
 }
