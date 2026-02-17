@@ -3,11 +3,14 @@
 #include <mutex>
 #include <chrono>
 #include <functional>
+#include <memory>
+
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
+
 #include "bno08x_driver/bno08x.hpp"
 #include "bno08x_driver/logger.h"
 #include "bno08x_driver/watchdog.hpp"
@@ -54,12 +57,12 @@ private:
     rclcpp::TimerBase::SharedPtr poll_timer_;
 
     // BNO08X Sensor Interface
-    BNO08x* bno08x_{nullptr};
     std::mutex bno08x_mutex_;
-    CommInterface* comm_interface_{nullptr};
+    std::unique_ptr<CommInterface> comm_interface_;  // must be defined before bno08x_ so it’s destroyed after bno08x_
+    std::unique_ptr<BNO08x> bno08x_;                 // Destruction is reverse of declaration order.
 
     // Watchdog
-    Watchdog* watchdog_{nullptr};
+    std::unique_ptr<Watchdog> watchdog_;
 
     // IMU data bundling for more consistent timestamps
     bool imu_bundle_active_{false};

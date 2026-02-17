@@ -60,7 +60,7 @@ BNO08xROS::BNO08xROS()
 
     // Initialize the watchdog timer
     auto timeout = std::chrono::milliseconds(2000);
-    watchdog_ = new Watchdog();
+    watchdog_ = std::make_unique<Watchdog>();
     watchdog_->set_timeout(timeout);
     watchdog_->set_check_interval(timeout / 2);
     watchdog_->set_callback([this]() {
@@ -73,9 +73,9 @@ BNO08xROS::BNO08xROS()
 }
 
 BNO08xROS::~BNO08xROS() {
-    delete watchdog_;
-    delete bno08x_;
-    delete comm_interface_;
+    if (watchdog_)
+        watchdog_->stop();
+    // unique_ptr will destroy things automatically in reverse member order.
 }
 
 /**
@@ -96,7 +96,7 @@ void BNO08xROS::init_comms() {
         this->get_parameter("i2c.address", address);
         RCLCPP_INFO(this->get_logger(), "Communication Interface: I2C");
         try {
-            comm_interface_ = new I2CInterface(device, std::stoi(address, nullptr, 16));
+            comm_interface_ = std::make_unique<I2CInterface>(device, std::stoi(address, nullptr, 16));
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(),
                          "Failed to create I2CInterface: %s", e.what());
@@ -107,7 +107,7 @@ void BNO08xROS::init_comms() {
         std::string device;
         this->get_parameter("uart.device", device);
         try {
-            comm_interface_ = new UARTInterface(device);
+            comm_interface_ = std::make_unique<UARTInterface>(device);
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(),
                          "UART Interface not implemented: %s", e.what());
@@ -118,7 +118,7 @@ void BNO08xROS::init_comms() {
         std::string device;
         this->get_parameter("spi.device", device);
         try {
-            comm_interface_ = new SPIInterface(device);
+            comm_interface_ = std::make_unique<SPIInterface>(device);
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(),
                          "SPI Interface not implemented: %s", e.what());
@@ -179,8 +179,11 @@ void BNO08xROS::init_parameters() {
 void BNO08xROS::init_sensor() {
 
     try {
-        bno08x_ = new BNO08x(comm_interface_, std::bind(&BNO08xROS::sensor_callback, this,
-                             std::placeholders::_1, std::placeholders::_2), this);
+        bno08x_ = std::make_unique<BNO08x>(
+            comm_interface_.get(),  // raw pointer
+            std::bind(&BNO08xROS::sensor_callback, this,
+            std::placeholders::_1, std::placeholders::_2), this
+        );
     } catch (const std::bad_alloc& e) {
         RCLCPP_ERROR(this->get_logger(),
                      "Failed to allocate memory for BNO08x object: %s", e.what());
@@ -504,7 +507,6 @@ void BNO08xROS::reset() {
     imu_received_flag_ = 0;
     imu_bundle_active_ = false;
     accuracy_status_ = 0;
-    delete bno08x_;
-    bno08x_ = nullptr;
-    init_sensor();
+    bno08x_.reset();   // deletes current object (if any)
+    init_sensor();     // will assign a new one via make_unique
 }
