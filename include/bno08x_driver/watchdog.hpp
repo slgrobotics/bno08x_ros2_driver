@@ -17,36 +17,39 @@ public:
         : timeout_(timeout), check_interval_(check_interval), callback_(callback), enable_watchdog_(false), 
           last_reset_(std::chrono::steady_clock::now())
     {
+        running_ = true;
+        enable_watchdog_ = false;
+
         watchdog_thread_ = std::thread([this]() {
             //pthread_setname_np(pthread_self(), "watchdog_thread");
-            while (enable_watchdog_) {
+            while (running_) {
                 std::this_thread::sleep_for(check_interval_);
-                auto now = std::chrono::steady_clock::now();
+
+                if (!enable_watchdog_) continue;
+
+                const auto now = std::chrono::steady_clock::now();
                 std::chrono::steady_clock::time_point last_reset_cp;
                 {
                     std::lock_guard<std::mutex> lock(reset_mutex_);
                     last_reset_cp = last_reset_;
                 }
+
                 std::function<void()> current_callback;
                 {
                     std::lock_guard<std::mutex> lock(callback_mutex_);
                     if (enable_watchdog_ && (now - last_reset_cp) >= timeout_) {
-                         current_callback = callback_;
-                    }
-                    else {
-                        continue;
+                        current_callback = callback_;
                     }
                 }
-                
-                if (current_callback) {
-                    current_callback();
-                }
+
+                if (current_callback) current_callback();
             }
         });
     }
 
     ~Watchdog(){
         enable_watchdog_ = false;
+        running_ = false;
         if (watchdog_thread_.joinable()) {
             watchdog_thread_.join();
         }
@@ -62,7 +65,10 @@ public:
     }
 
     void start() {
-        last_reset_ = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(reset_mutex_);
+            last_reset_ = std::chrono::steady_clock::now();
+        }
         enable_watchdog_ = true;
     }
 
@@ -91,12 +97,15 @@ public:
     }
     
 private:
+    std::atomic<bool> running_{false};
+    std::atomic<bool> enable_watchdog_{false};
+
     std::chrono::milliseconds timeout_;
     std::chrono::milliseconds check_interval_;
+    std::chrono::steady_clock::time_point last_reset_;
+
     std::function<void()> callback_;
-    std::atomic<bool> enable_watchdog_;
     std::mutex callback_mutex_;
     std::mutex reset_mutex_;
-    std::chrono::steady_clock::time_point last_reset_;
     std::thread watchdog_thread_;
 };
