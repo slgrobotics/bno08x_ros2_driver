@@ -97,14 +97,13 @@ public:
     }
     
 private:
-    std::atomic<bool> running_{false};
-    std::atomic<bool> enable_watchdog_{false};
-
     std::chrono::milliseconds timeout_;
     std::chrono::milliseconds check_interval_;
+    std::function<void()> callback_;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> enable_watchdog_{false};
     std::chrono::steady_clock::time_point last_reset_;
 
-    std::function<void()> callback_;
     std::mutex callback_mutex_;
     std::mutex reset_mutex_;
     std::thread watchdog_thread_;
