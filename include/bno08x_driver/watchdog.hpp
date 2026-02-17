@@ -14,7 +14,8 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds(1000),
         std::chrono::milliseconds check_interval = std::chrono::milliseconds(500),
         std::function<void()> callback = []() {} )
-        : timeout_(timeout), check_interval_(check_interval),
+        : timeout_(timeout),
+          check_interval_(check_interval),
           callback_(std::move(callback)),
           last_reset_(std::chrono::steady_clock::now())
     {
@@ -23,7 +24,10 @@ public:
         watchdog_thread_ = std::thread([this]() {
             //pthread_setname_np(pthread_self(), "watchdog_thread");
             while (is_running_.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(check_interval_);
+                const auto to_sleep = get_check_interval();
+                const auto time_out = get_timeout();
+
+                std::this_thread::sleep_for(to_sleep);
 
                 if (!is_enabled_.load(std::memory_order_acquire)) continue;
 
@@ -38,7 +42,7 @@ public:
                 {
                     std::lock_guard<std::mutex> lock(callback_mutex_);
                     if (is_enabled_.load(std::memory_order_relaxed)
-                        && (now - last_reset_cp) >= timeout_) {
+                        && (now - last_reset_cp) >= time_out) {
                         current_callback = callback_;
                     }
                 }
@@ -71,11 +75,12 @@ public:
     }
 
     void set_timeout(std::chrono::milliseconds timeout){
-        // TODO: protect or make atomic if changed at runtime
+        std::lock_guard<std::mutex> lock(reset_mutex_);
         timeout_ = timeout;
     }
 
-    std::chrono::milliseconds get_timeout() const noexcept {
+    std::chrono::milliseconds get_timeout() noexcept {
+        std::lock_guard<std::mutex> lock(reset_mutex_);
         return timeout_;
     }
 
@@ -88,11 +93,12 @@ public:
         callback_ = std::move(callback);
     }
     void set_check_interval(std::chrono::milliseconds interval) {
-        // TODO: protect or make atomic if changed at runtime
+        std::lock_guard<std::mutex> lock(reset_mutex_);
         check_interval_ = interval;
     }
 
-    std::chrono::milliseconds get_check_interval() const noexcept {
+    std::chrono::milliseconds get_check_interval() noexcept {
+        std::lock_guard<std::mutex> lock(reset_mutex_);
         return check_interval_;
     }
     
