@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(bno08x_driver)
 
 # Check for compiler options
@@ -48,15 +48,11 @@ target_include_directories(bno08x_driver PUBLIC
 target_compile_features(bno08x_driver PUBLIC cxx_std_17)
 
 # Link against sh2 library
-target_link_libraries(bno08x_driver
+target_link_libraries(bno08x_driver PUBLIC
   sh2_library
-)
-
-ament_target_dependencies(
-  bno08x_driver
-  "rclcpp"
-  "sensor_msgs"
-  "std_msgs"
+  rclcpp::rclcpp
+  sensor_msgs::sensor_msgs
+  std_msgs::std_msgs
 )
 
 # Install the executable and the config files

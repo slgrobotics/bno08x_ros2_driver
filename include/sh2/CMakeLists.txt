@@ -1,7 +1,7 @@
 # sh2/CMakeLists.txt
 
 # Create a library from the sh2 sources
-add_library(sh2_library
+add_library(sh2_library SHARED
   sh2.c
   sh2_SensorValue.c
   sh2_util.c
@@ -15,3 +15,7 @@ target_include_directories(sh2_library PUBLIC
 
 # If any specific compile features or options are needed for the sh2 library
 target_compile_features(sh2_library PUBLIC c_std_99)
+
+# Install the shared library
+install(TARGETS sh2_library
+  DESTINATION lib)
