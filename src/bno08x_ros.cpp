@@ -171,6 +171,12 @@ void BNO08xROS::init_parameters() {
 
     this->declare_parameter<bool>("scale_covariance_by_calib", false);
     this->get_parameter("scale_covariance_by_calib", scale_covariance_by_calib_);
+
+    // Default false preserves 9-DOF (magnetometer-fused) orientation, matching the sensor's advertised
+    // capability. Set true to fall back to 6-DOF (accel+gyro only) when the magnetometer is unusable
+    // (indoor use, ferrous chassis, magnetic interference) and SH-2 fusion stalls on mag calibration.
+    this->declare_parameter<bool>("enable_6dof_mode", false);
+    this->get_parameter("enable_6dof_mode", enable_6dof_mode_);
 }
 
 /**
@@ -205,7 +211,11 @@ void BNO08xROS::init_sensor() {
         }
     }
     if (publish_imu_) {
-        if(!bno08x_->enable_report(SH2_ROTATION_VECTOR,
+        const uint8_t rv_sensor_id = enable_6dof_mode_ ? SH2_GAME_ROTATION_VECTOR : SH2_ROTATION_VECTOR;
+        RCLCPP_INFO(this->get_logger(), "Enabling %s (%s-DOF orientation)",
+                    sensor_name(rv_sensor_id).c_str(),
+                    enable_6dof_mode_ ? "6" : "9");
+        if(!bno08x_->enable_report(rv_sensor_id,
                                    1000000/imu_rate_)) {             // Hz to us
             RCLCPP_ERROR(this->get_logger(), "Failed to enable rotation vector sensor");
         }
@@ -237,6 +247,8 @@ std::string BNO08xROS::sensor_name(uint8_t sensor_id)
         return "Calibrated Magnetic Field";
     case SH2_ROTATION_VECTOR:
         return "Rotation Vector";
+    case SH2_GAME_ROTATION_VECTOR:
+        return "Game Rotation Vector";
     case SH2_ACCELEROMETER:
         return "Accelerometer";
     case SH2_GYROSCOPE_CALIBRATED:
@@ -323,7 +335,8 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
     const auto now = this->now();
     uint8_t sensor_id = sensor_value->sensorId;
 
-    if (sensor_id == SH2_ROTATION_VECTOR || sensor_id == SH2_ACCELEROMETER || sensor_id == SH2_GYROSCOPE_CALIBRATED) {
+    if (sensor_id == SH2_ROTATION_VECTOR || sensor_id == SH2_GAME_ROTATION_VECTOR
+        || sensor_id == SH2_ACCELEROMETER || sensor_id == SH2_GYROSCOPE_CALIBRATED) {
         // one of the values that goes into imu_data bundle, so manage bundle timing and flags
         if (!imu_bundle_active_) {
             // Start bundle timing if this is the first component
@@ -333,6 +346,13 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         } else if ((now - imu_bundle_start_time_).seconds() >= IMU_BUNDLE_TIMEOUT_SEC) {
             // If bundle takes too long, treat the current message as “first of a new bundle”
             RCLCPP_WARN(this->get_logger(), "IMU data bundle timeout. flag=0x%02x. Restarting bundle.", imu_received_flag_);
+            // flag==ACCELEROMETER_RECEIVED in 9-DOF mode = SH-2 fusion stuck on magnetometer calibration.
+            if (!enable_6dof_mode_ && imu_received_flag_ == ACCELEROMETER_RECEIVED) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+                    "Rotation vector not arriving. SH-2 fusion is likely stuck on magnetometer "
+                    "calibration (indoor use, ferrous chassis, or magnetic interference nearby). "
+                    "Set 'enable_6dof_mode: true' in yaml to fall back to 6-DOF (accel+gyro) orientation.");
+            }
             imu_received_flag_ = 0;
             imu_bundle_active_ = true;
             imu_bundle_start_time_ = now;
@@ -383,6 +403,21 @@ void BNO08xROS::sensor_callback(void *cookie, sh2_SensorValue_t *sensor_value) {
         imu_msg_.orientation.w = sensor_value->un.rotationVector.real;
 
         // Add orientation covariance scaled by accuracy:
+        imu_msg_.orientation_covariance[0] = get_covariance_scaled(3e-4f, sensor_accuracy);  // roll
+        imu_msg_.orientation_covariance[4] = get_covariance_scaled(3e-4f, sensor_accuracy);  // pitch
+        imu_msg_.orientation_covariance[8] = get_covariance_scaled(static_cast<float>(orientation_yaw_variance_), sensor_accuracy);  // yaw
+
+        imu_received_flag_ |= ROTATION_VECTOR_RECEIVED;
+        break;
+
+    case SH2_GAME_ROTATION_VECTOR:
+        accuracy_status_ = (accuracy_status_ & ~RV_MASK) | (sensor_accuracy << 6); // Update bits 6-7 for Rotation Vector accuracy
+        // 6-DOF (accel+gyro) quaternion; identical i/j/k/real layout to rotationVector, different union member.
+        imu_msg_.orientation.x = sensor_value->un.gameRotationVector.i;
+        imu_msg_.orientation.y = sensor_value->un.gameRotationVector.j;
+        imu_msg_.orientation.z = sensor_value->un.gameRotationVector.k;
+        imu_msg_.orientation.w = sensor_value->un.gameRotationVector.real;
+
         imu_msg_.orientation_covariance[0] = get_covariance_scaled(3e-4f, sensor_accuracy);  // roll
         imu_msg_.orientation_covariance[4] = get_covariance_scaled(3e-4f, sensor_accuracy);  // pitch
         imu_msg_.orientation_covariance[8] = get_covariance_scaled(static_cast<float>(orientation_yaw_variance_), sensor_accuracy);  // yaw

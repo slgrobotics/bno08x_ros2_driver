@@ -79,6 +79,8 @@ private:
     double orientation_yaw_variance_;
     bool verbose_;
     bool scale_covariance_by_calib_;
+    // false (default): 9-DOF (accel+gyro+mag, SH2_ROTATION_VECTOR); true: 6-DOF (accel+gyro, SH2_GAME_ROTATION_VECTOR).
+    bool enable_6dof_mode_;
 
     bool publish_orientation_;
     bool publish_acceleration_;

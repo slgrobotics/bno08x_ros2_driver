@@ -5,6 +5,14 @@ bno08x_driver:
     verbose: false        # Enable verbose logging (default false)
     scale_covariance_by_calib: false  # Scale covariance by calibration accuracy (default false)
 
+    # false (default): 9-DOF orientation (accel+gyro+mag, SH2_ROTATION_VECTOR) — matches the sensor's
+    #                  advertised capability and provides absolute (magnetic-north) yaw.
+    # true:            6-DOF orientation (accel+gyro,     SH2_GAME_ROTATION_VECTOR) — use when the
+    #                  magnetometer is unusable (indoor, ferrous chassis, magnetic interference) and
+    #                  the SH-2 fusion stalls waiting on mag calibration. Yaw is relative, not
+    #                  magnetic-north-referenced.
+    enable_6dof_mode: false
+
     # Communication Interface
     # Select the communication interface to use 
     # (only one interface can be enabled at a time)
