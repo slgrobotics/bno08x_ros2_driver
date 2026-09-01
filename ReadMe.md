@@ -1,4 +1,4 @@
-This fork fixes the following issue: https://github.com/bnbhat/bno08x_ros2_driver/issues/16
+This fork fixes the following issue: https://github.com/bnbhat/bno08x_ros2_driver/issues/16 - and adds a lot of other useful functionality.
 
 Please see [this guide](https://github.com/slgrobotics/robots_bringup/blob/main/Docs/Sensors/BNO085%20IMU.md) for details
 
